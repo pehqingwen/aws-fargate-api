@@ -1,0 +1,12 @@
+{
+  "type": "module",
+  "name": "fargate-api",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

@@ -1,0 +1,39 @@
+name: deploy
+on:
+  push:
+    branches: [ main ]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ap-southeast-1
+      ECR_REPO: fargate-api
+      CLUSTER: fargate-api-cluster
+      SERVICE: fargate-api-svc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::<YOUR_ACCOUNT_ID>:role/GH-OIDC-Deploy
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build & push
+        run: |
+          IMAGE=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
+          docker build -t $IMAGE ./app
+          docker push $IMAGE
+
+      - name: Force ECS rollout
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.CLUSTER }}" \
+            --service "${{ env.SERVICE }}" \
+            --force-new-deployment \
+            --region "${{ env.AWS_REGION }}"
