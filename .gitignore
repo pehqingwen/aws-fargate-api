@@ -1,0 +1,20 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+terraform.rc
+.terraformrc
+
+# Keep the lockfile (commit this):
+!.terraform.lock.hcl
+
+# Node
+node_modules/
+npm-debug.log
