@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.932.0",
     "express": "^4.19.2"
   },
   "scripts": {
