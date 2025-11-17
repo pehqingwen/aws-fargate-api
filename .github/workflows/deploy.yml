@@ -2,38 +2,70 @@ name: deploy
 on:
   push:
     branches: [ main ]
+
 permissions:
-  id-token: write
+  id-token: write   # for OIDC
   contents: read
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REPO: fargate-api
+  CLUSTER: fargate-api-cluster
+  SERVICE: fargate-api-svc
+  ALB_NAME: fargate-api-alb      # you set this in Terraform
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      AWS_REGION: ap-southeast-1
-      ECR_REPO: fargate-api
-      CLUSTER: fargate-api-cluster
-      SERVICE: fargate-api-svc
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::<YOUR_ACCOUNT_ID>:role/GH-OIDC-Deploy
+          role-to-assume: arn:aws:iam::541701833637:role/GH-OIDC-Deploy
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Login to ECR
         id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push
+      - name: Build & push Docker image to ECR
         run: |
           IMAGE=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
-          docker build -t $IMAGE ./app
-          docker push $IMAGE
+          docker build -t "$IMAGE" ./app
+          docker push "$IMAGE"
+        # If you prefer tag with the commit SHA, add: :${{ github.sha }}
 
-      - name: Force ECS rollout
+      - name: Force ECS new deployment
         run: |
           aws ecs update-service \
             --cluster "${{ env.CLUSTER }}" \
             --service "${{ env.SERVICE }}" \
             --force-new-deployment \
             --region "${{ env.AWS_REGION }}"
+
+      - name: Wait until ECS service is stable
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ env.CLUSTER }}" \
+            --services "${{ env.SERVICE }}" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Discover ALB DNS by name and smoke test /healthz
+        run: |
+          DNS=$(aws elbv2 describe-load-balancers \
+            --names "${{ env.ALB_NAME }}" \
+            --query 'LoadBalancers[0].DNSName' --output text \
+            --region "${{ env.AWS_REGION }}")
+          echo "ALB DNS = $DNS"
+          # Simple health check (2 tries)
+          for i in 1 2; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://${DNS}/healthz" || true)
+            echo "Attempt $i -> HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "Health check failed"; exit 1
