@@ -12,7 +12,7 @@ env:
   ECR_REPO: fargate-api
   CLUSTER: fargate-api-cluster
   SERVICE: fargate-api-svc
-  ALB_NAME: fargate-api-alb      # you set this in Terraform
+  ALB_NAME: fargate-api-alb    
 
 jobs:
   deploy:
