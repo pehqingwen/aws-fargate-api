@@ -32,18 +32,21 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}   # e.g. arn:aws:iam::<acct>:role/GH-OIDC-Deploy
           aws-region: ${{ env.AWS_REGION }}
 
-      # Build & push the image (no local Docker creds needed)
+     # Log in to Amazon ECR
       - name: Log in to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+    # Build & push
       - name: Build and push image
-        working-directory: ${{ env.APP_DIR }}
+        working-directory: ${{ env.APP_DIR }} # ensure your Dockerfile is here
         run: |
           set -e
-          IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"   # e.g. 5417....dkr.ecr.ap-southeast-1.amazonaws.com
+          IMAGE="$REGISTRY/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
           docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          docker push "$IMAGE"  
 
       # Terraform apply infra/service
       - name: Set up Terraform
