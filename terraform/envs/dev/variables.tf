@@ -29,3 +29,8 @@ variable "private_subnets" {
   type    = list(string)
   default = ["10.10.48.0/20", "10.10.64.0/20", "10.10.80.0/20"]
 }
+
+variable "audit_bucket_name" {
+  type    = string
+  default = "qw-audit-logs-541701833637-aps1"
+}

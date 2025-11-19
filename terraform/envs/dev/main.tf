@@ -36,20 +36,21 @@ module "vpc" {
   }
 }
 
-# ECR repo for the API image
-resource "aws_ecr_repository" "api" {
+
+resource "aws_ecr_repository" "repo" {
   name                 = "fargate-api"
   image_tag_mutability = "MUTABLE"
+  image_scanning_configuration { scan_on_push = true }
 
-  image_scanning_configuration {
-    scan_on_push = true
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [image_tag_mutability, image_scanning_configuration, encryption_configuration]
   }
 
-  tags = {
-    Project = var.project
-    Env     = var.env
-  }
+  tags = { Project = var.project, Env = var.env }
 }
+
+
 
 # Security Groups
 resource "aws_security_group" "alb" {
@@ -124,11 +125,11 @@ resource "aws_lb_target_group" "api" {
 
   health_check {
     path                = "/healthz"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 5
-    timeout             = 5
-    interval            = 30
-    matcher             = "200"
   }
 
   tags = {
@@ -194,44 +195,74 @@ resource "aws_cloudwatch_log_group" "api" {
   retention_in_days = 14
 }
 
-resource "aws_ecs_task_definition" "api" {
-  family                   = "${var.project}-task"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = 256
-  memory                   = 512
-  execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.task_role.arn
-
-  container_definitions = jsonencode([
-    {
-      "name" : "api",
-      "image" : "${aws_ecr_repository.api.repository_url}:latest",
-      "essential" : true,
-      "portMappings" : [
-        { "containerPort" : 3000, "hostPort" : 3000, "protocol" : "tcp" }
-      ],
-      "environment" : [
-        { "name" : "PORT", "value" : "3000" }
-      ],
-      "logConfiguration" : {
-        "logDriver" : "awslogs",
-        "options" : {
-          "awslogs-group" : "${aws_cloudwatch_log_group.api.name}",
-          "awslogs-region" : "${var.region}",
-          "awslogs-stream-prefix" : "ecs"
-        }
-      },
-      "healthCheck" : {
-        "command" : ["CMD-SHELL", "curl -fsS http://localhost:3000/healthz || exit 1"],
-        "interval" : 30,
-        "timeout" : 5,
-        "retries" : 3,
-        "startPeriod" : 10
+locals {
+  api_container = {
+    name  = "api"
+    image = "${aws_ecr_repository.repo.repository_url}:latest"
+    portMappings = [
+      { containerPort = 3000, protocol = "tcp" }
+    ]
+    # 👇 limits
+    memoryReservation = 512
+    memory            = 1024
+    environment = [
+      { name = "PORT", value = "3000" },
+      { name = "NODE_OPTIONS", value = "--max-old-space-size=256" }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = "/ecs/fargate-api"
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "ecs"
       }
     }
-  ])
+    # healthCheck = {
+    #   command     = ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+    #   interval    = 30
+    #   timeout     = 5
+    #   retries     = 3
+    #   startPeriod = 10
+    # }
+    essential = true
+  }
 }
+
+resource "aws_ecs_task_definition" "api" {
+  family                   = var.project
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024" # task-level
+  memory                   = "2048" # task-level
+  execution_role_arn       = aws_iam_role.execution_role.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([local.api_container])
+}
+
+
+# Execution role: used by the ECS agent to pull images & push logs
+data "aws_iam_policy_document" "ecs_task_execution_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "execution_role" {
+  name               = "${var.project}-exec-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_execution_assume.json
+  tags               = { Project = var.project, Env = var.env }
+}
+
+resource "aws_iam_role_policy_attachment" "execution_role_managed" {
+  role       = aws_iam_role.execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
 
 resource "aws_ecs_service" "api" {
   name            = "${var.project}-svc"
@@ -332,4 +363,74 @@ resource "aws_iam_policy" "dynamo_access" {
 resource "aws_iam_role_policy_attachment" "task_dynamo" {
   role       = aws_iam_role.task_role.name
   policy_arn = aws_iam_policy.dynamo_access.arn
+}
+
+# --- WAFv2 Web ACL (REGIONAL) ---
+resource "aws_wafv2_web_acl" "alb_waf" {
+  name        = "${var.project}-waf"
+  description = "Basic managed protections"
+  scope       = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${var.project}-waf"
+    sampled_requests_enabled   = true
+  }
+
+  rule {
+    name     = "AWS-AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    override_action {
+      none {}
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "common"
+      sampled_requests_enabled   = true
+    }
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "alb_assoc" {
+  resource_arn = aws_lb.this.arn
+  web_acl_arn  = aws_wafv2_web_acl.alb_waf.arn
+}
+
+# ALB 5xx rate alarm
+resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  alarm_name          = "${var.project}-alb-5xx"
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "HTTPCode_ELB_5XX_Count"
+  dimensions          = { LoadBalancer = aws_lb.this.arn_suffix }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 5
+  evaluation_periods  = 1
+  period              = 60
+  statistic           = "Sum"
+}
+
+# ECS CPU > 80% alarm
+resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
+  alarm_name          = "${var.project}-ecs-cpu-high"
+  namespace           = "AWS/ECS"
+  metric_name         = "CPUUtilization"
+  dimensions          = { ClusterName = aws_ecs_cluster.this.name, ServiceName = aws_ecs_service.api.name }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 80
+  evaluation_periods  = 2
+  period              = 60
+  statistic           = "Average"
 }
