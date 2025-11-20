@@ -180,6 +180,14 @@ resource "aws_s3_bucket_ownership_controls" "config_logs" {
   rule { object_ownership = "BucketOwnerEnforced" }
 }
 
+# NEW: Ownership Controls (BucketOwnerEnforced recommended)
+resource "aws_s3_bucket_ownership_controls" "audit" {
+  bucket = aws_s3_bucket.audit.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
 resource "aws_s3_bucket_versioning" "config_logs" {
   bucket = aws_s3_bucket.config_logs.id
   versioning_configuration { status = "Enabled" }
@@ -287,28 +295,51 @@ resource "aws_config_config_rule" "restricted_ssh" {
 # GuardDuty
 resource "aws_guardduty_detector" "this" {
   enable = true
-  datasources {
-    s3_logs { enable = true }
-  }
 }
 
-# Security Hub
-resource "aws_securityhub_account" "this" {}
+resource "aws_guardduty_detector_feature" "s3_data" {
+  detector_id = aws_guardduty_detector.this.id
+  name        = "S3_DATA_EVENTS"
+  status      = "ENABLED"
+}
 
-# AWS Foundational Security Best Practices (v1.0.0)
+resource "aws_guardduty_detector_feature" "ebs_malware" {
+  detector_id = aws_guardduty_detector.this.id
+  name        = "EBS_MALWARE_PROTECTION"
+  status      = "ENABLED"
+}
+
+resource "aws_guardduty_detector_feature" "rds_login" {
+  detector_id = aws_guardduty_detector.this.id
+  name        = "RDS_LOGIN_EVENTS"   # not "RDS_LOGIN_ACTIVITY"
+  status      = "ENABLED"
+}
+
+# optional
+resource "aws_guardduty_detector_feature" "eks_audit" {
+  detector_id = aws_guardduty_detector.this.id
+  name        = "EKS_AUDIT_LOGS"
+  status      = "ENABLED"
+}
+
+
+# Security Hub account (no defaults; we'll subscribe explicitly)
+resource "aws_securityhub_account" "this" {
+  enable_default_standards  = false
+  control_finding_generator = "SECURITY_CONTROL"
+}
+
+# AWS Foundational Security Best Practices
 resource "aws_securityhub_standards_subscription" "fsbp" {
   standards_arn = "arn:aws:securityhub:ap-southeast-1::standards/aws-foundational-security-best-practices/v/1.0.0"
   depends_on    = [aws_securityhub_account.this]
 }
 
-# CIS AWS Foundations Benchmark (pick ONE version; v5.0.0 recommended)
+# CIS AWS Foundations Benchmark v5
 resource "aws_securityhub_standards_subscription" "cis_v5" {
   standards_arn = "arn:aws:securityhub:ap-southeast-1::standards/cis-aws-foundations-benchmark/v/5.0.0"
   depends_on    = [aws_securityhub_account.this]
 }
-# If you specifically need an earlier version, use v3.0.0 or v1.4.0:
-# "arn:aws:securityhub:ap-southeast-1::standards/cis-aws-foundations-benchmark/v/3.0.0"
-# "arn:aws:securityhub:ap-southeast-1::standards/cis-aws-foundations-benchmark/v/1.4.0"
 
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
