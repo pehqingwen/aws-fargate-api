@@ -54,7 +54,7 @@ jobs:
 
       - name: Terraform Init (app only)
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false -reconfigure
+        run: terraform init -input=false -reconfigure -migrate-state
 
       - name: Terraform Plan (app only)
         working-directory: ${{ env.TF_DIR }}
@@ -90,6 +90,7 @@ jobs:
 
       - name: Smoke test
         run: |
+          set -e
           ALB_DNS=$(aws elbv2 describe-load-balancers \
             --names fargate-api-alb \
             --region "${AWS_REGION}" \
@@ -97,3 +98,4 @@ jobs:
           echo "ALB: $ALB_DNS"
           curl -fsS "http://${ALB_DNS}/healthz"
           curl -fsS "http://${ALB_DNS}/api/hello"
+
