@@ -1,4 +1,5 @@
 # Terraform
+**/.terraform/
 .terraform/
 *.tfstate
 *.tfstate.*
@@ -11,6 +12,13 @@ override.tf.json
 *_override.tf.json
 terraform.rc
 .terraformrc
+*.tfstate.backup
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+terraform.tfvars
+*.auto.tfvars
+plan.txt
 
 # Keep the lockfile (commit this):
 !.terraform.lock.hcl

@@ -76,6 +76,10 @@ resource "aws_security_group" "alb" {
     Project = var.project
     Env     = var.env
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_security_group" "ecs" {
@@ -101,6 +105,10 @@ resource "aws_security_group" "ecs" {
     Project = var.project
     Env     = var.env
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # === ALB (native resources instead of module) ===
@@ -113,6 +121,9 @@ resource "aws_lb" "this" {
   tags = {
     Project = var.project
     Env     = var.env
+  }
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -136,6 +147,10 @@ resource "aws_lb_target_group" "api" {
     Project = var.project
     Env     = var.env
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Keep this HTTP listener
@@ -147,6 +162,10 @@ resource "aws_lb_listener" "http" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -238,6 +257,10 @@ resource "aws_ecs_task_definition" "api" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([local.api_container])
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 
@@ -287,7 +310,8 @@ resource "aws_ecs_service" "api" {
   }
 
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes  = [task_definition]
+    prevent_destroy = true
   }
 
   # ⛔️ remove the old depends_on if it referenced the module:

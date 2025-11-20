@@ -17,6 +17,12 @@ app.post("/items/:id", async (req, res) => {
   res.json({ ok: true, id: req.params.id });
 });
 
+app.get("/", (req, res) => res.send("welcome"));
+
+app.get("/api/hello", (req, res) => {
+  res.json({ hello: "world" });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`listening on ${PORT}`);
 });

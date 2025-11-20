@@ -3,113 +3,97 @@ name: deploy
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'terraform/envs/dev/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
 
 env:
   AWS_REGION: ap-southeast-1
   ECR_REPO: fargate-api
   CLUSTER: fargate-api-cluster
   SERVICE: fargate-api-svc
-  # adjust if your Terraform lives elsewhere
   TF_DIR: terraform/envs/dev
   APP_DIR: app
-  IMAGE_TAG: ${{ github.sha }}
-
-permissions:
-  id-token: write   # for OIDC
-  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS via OIDC
+      - name: Configure AWS creds (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}   # e.g. arn:aws:iam::<acct>:role/GH-OIDC-Deploy
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-     # Log in to Amazon ECR
-      - name: Log in to Amazon ECR
-        id: login-ecr
+      - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-    # Build & push
-      - name: Build and push image
-        working-directory: ${{ env.APP_DIR }} # ensure your Dockerfile is here
+      - name: Build & Push image
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -e
-          REGISTRY="${{ steps.login-ecr.outputs.registry }}"   # e.g. 5417....dkr.ecr.ap-southeast-1.amazonaws.com
-          IMAGE="$REGISTRY/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"  
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REPO="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+          docker build -t "${REPO}:${IMAGE_TAG}" .
+          docker push "${REPO}:${IMAGE_TAG}"
+          echo "IMAGE=${REPO}:${IMAGE_TAG}" >> $GITHUB_ENV
 
-      # Terraform apply infra/service
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init
+      - name: Terraform Init (app only)
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false
+        run: terraform init -input=false -reconfigure
 
-      - name: Terraform Plan
+      - name: Terraform Plan (app only)
         working-directory: ${{ env.TF_DIR }}
         run: terraform plan -input=false
 
-      - name: Terraform Apply
+      - name: Update task definition image (JSON patch)
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          # Assumes your task definition uses var.image or a local for image via TF vars
+          # If your TF reads image from a variable, write it to a tfvars file for this run:
+          echo 'image = "'"${IMAGE}"'"' > ci.auto.tfvars
+
+      - name: Terraform Apply (app only)
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.TF_DIR }}
         run: terraform apply -auto-approve -input=false
 
-      # Tell ECS to use the new image (force rollout)
-      - name: Update ECS service to new taskdef/image
+      - name: Force ECS deployment (ensure rollout)
         run: |
-          set -e
-          # If your task definition template references :latest, ensure your TD is updated to use env.IMAGE_TAG (recommended).
-          # Otherwise we still force a new deployment to pick the latest :latest.
           aws ecs update-service \
-            --cluster "${{ env.CLUSTER }}" \
-            --service "${{ env.SERVICE }}" \
-            --force-new-deployment
+            --cluster "${CLUSTER}" \
+            --service "${SERVICE}" \
+            --force-new-deployment \
+            --region "${AWS_REGION}" \
+            >/dev/null
 
-      # Watch ECS events briefly (great for debugging)
-      - name: Watch ECS events (2 minutes)
-        run: |
-          end=$((SECONDS+120))
-          while [ $SECONDS -lt $end ]; do
-            aws ecs describe-services --cluster "${{ env.CLUSTER }}" --services "${{ env.SERVICE }}" \
-              --query "services[0].events[0:3].[createdAt,message]" --output table || true
-            sleep 10
-          done
-
-      # Wait until service is stable
-      - name: Wait for ECS service to stabilize
+      - name: Wait until ECS service is stable (10m)
         run: |
           aws ecs wait services-stable \
-            --cluster "${{ env.CLUSTER }}" \
-            --services "${{ env.SERVICE }}"
+            --cluster "${CLUSTER}" \
+            --services "${SERVICE}" \
+            --region "${AWS_REGION}"
 
-      # Smoke test through ALB
-      - name: Get ALB DNS
-        id: alb
+      - name: Smoke test
         run: |
-          ALB_ARN=$(aws elbv2 describe-load-balancers \
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
             --names fargate-api-alb \
-            --query "LoadBalancers[0].LoadBalancerArn" --output text)
-          DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" \
-            --query "LoadBalancers[0].DNSName" --output text)
-          echo "dns=$DNS" >> $GITHUB_OUTPUT
-
-      - name: Smoke test /healthz
-        run: |
-          set -e
-          curl -fsS "http://${{ steps.alb.outputs.dns }}/healthz"
-
-      - name: Smoke test /api/hello
-        run: |
-          set -e
-          curl -fsS "http://${{ steps.alb.outputs.dns }}/api/hello"
+            --region "${AWS_REGION}" \
+            --query 'LoadBalancers[0].DNSName' --output text)
+          echo "ALB: $ALB_DNS"
+          curl -fsS "http://${ALB_DNS}/healthz"
+          curl -fsS "http://${ALB_DNS}/api/hello"
