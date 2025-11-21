@@ -54,8 +54,8 @@ jobs:
 
       - name: Terraform Init (app only)
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false -reconfigure -migrate-state
-
+        run: terraform init -input=false -reconfigure 
+        
       - name: Terraform Plan (app only)
         working-directory: ${{ env.TF_DIR }}
         run: terraform plan -input=false
