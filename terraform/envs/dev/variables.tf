@@ -34,3 +34,13 @@ variable "audit_bucket_name" {
   type    = string
   default = "qw-audit-logs-541701833637-aps1"
 }
+
+variable "image" {
+  type    = string
+  default = ""
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnet IDs for the ECS service"
+  type        = list(string)
+}

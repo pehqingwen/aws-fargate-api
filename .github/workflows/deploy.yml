@@ -56,21 +56,35 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform init -input=false -reconfigure 
         
-      - name: Terraform Plan (app only)
+      # make sure TF sees the new image tag before planning
+      - name: Write image tfvars for this run
         working-directory: ${{ env.TF_DIR }}
-        run: terraform plan -input=false
+        run: echo 'image = "'"${IMAGE}"'"' > ci.auto.tfvars
 
-      - name: Update task definition image (JSON patch)
+      - name: Terraform Plan (app-only targets)
         working-directory: ${{ env.TF_DIR }}
-        run: |
-          # Assumes your task definition uses var.image or a local for image via TF vars
-          # If your TF reads image from a variable, write it to a tfvars file for this run:
-          echo 'image = "'"${IMAGE}"'"' > ci.auto.tfvars
+        run: >
+          terraform plan -input=false
+          -target=aws_cloudwatch_log_group.api
+          -target=aws_iam_role.task_execution
+          -target=aws_iam_role.task_role
+          -target=aws_ecr_repository.repo
+          -target=aws_ecs_task_definition.api
+          -target=aws_ecs_service.api
+          -target=aws_dynamodb_table.items
 
-      - name: Terraform Apply (app only)
+      - name: Terraform Apply (app-only targets)
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.TF_DIR }}
-        run: terraform apply -auto-approve -input=false
+        run: >
+          terraform apply -auto-approve -input=false
+          -target=aws_cloudwatch_log_group.api
+          -target=aws_iam_role.task_execution
+          -target=aws_iam_role.task_role
+          -target=aws_ecr_repository.repo
+          -target=aws_ecs_task_definition.api
+          -target=aws_ecs_service.api
+          -target=aws_dynamodb_table.items
 
       - name: Force ECS deployment (ensure rollout)
         run: |
@@ -78,8 +92,7 @@ jobs:
             --cluster "${CLUSTER}" \
             --service "${SERVICE}" \
             --force-new-deployment \
-            --region "${AWS_REGION}" \
-            >/dev/null
+            --region "${AWS_REGION}" >/dev/null
 
       - name: Wait until ECS service is stable (10m)
         run: |
@@ -98,4 +111,3 @@ jobs:
           echo "ALB: $ALB_DNS"
           curl -fsS "http://${ALB_DNS}/healthz"
           curl -fsS "http://${ALB_DNS}/api/hello"
-

@@ -4,6 +4,9 @@ resource "aws_s3_bucket" "audit" {
   object_lock_enabled = true
   force_destroy       = false
   tags                = { Project = var.project, Env = var.env }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Versioning (required for Object Lock)
@@ -11,6 +14,9 @@ resource "aws_s3_bucket_versioning" "audit" {
   bucket = aws_s3_bucket.audit.id
   versioning_configuration {
     status = "Enabled"
+  }
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -22,6 +28,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
       sse_algorithm = "AES256"
     }
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Block all public access
@@ -31,6 +40,9 @@ resource "aws_s3_bucket_public_access_block" "audit" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Object Lock default retention (compliance)
@@ -45,6 +57,9 @@ resource "aws_s3_bucket_object_lock_configuration" "audit" {
       mode = "COMPLIANCE"
       days = 30
     }
+  }
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -115,6 +130,10 @@ data "aws_iam_policy_document" "audit_bucket_policy" {
 resource "aws_s3_bucket_policy" "audit" {
   bucket = aws_s3_bucket.audit.id
   policy = data.aws_iam_policy_document.audit_bucket_policy.json
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # 2) Multi-region CloudTrail (account scope)
@@ -132,6 +151,10 @@ resource "aws_cloudtrail" "account_trail" {
   }
 
   depends_on = [aws_s3_bucket_policy.audit]
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Role for the recorder
