@@ -12,7 +12,7 @@ jobs:
         with:
           node-version: 20
       - name: Install deps
-        run: cd app && npm ci
+        run: cd app && npm install
       - name: Lint Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
         with:
