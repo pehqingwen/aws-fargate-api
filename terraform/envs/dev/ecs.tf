@@ -36,7 +36,28 @@ resource "aws_ecs_task_definition" "api" {
 
       environment = [
         { name = "PORT", value = tostring(local.container_port) },
-        { name = "NODE_OPTIONS", value = "--max-old-space-size=256" }
+        { name = "NODE_OPTIONS", value = "--max-old-space-size=256" },
+        { name = "ITEMS_TABLE_NAME", value = aws_dynamodb_table.items.name },
+      {
+    name  = "DB_HOST"
+    value = aws_rds_cluster.aurora.endpoint
+  },
+  {
+    name  = "DB_PORT"
+    value = tostring(aws_rds_cluster.aurora.port)
+  },
+  {
+    name  = "DB_NAME"
+    value = aws_rds_cluster.aurora.database_name
+  },
+  {
+    name  = "DB_USER"
+    value = aws_rds_cluster.aurora.master_username
+  },
+  {
+    name  = "DB_PASSWORD"
+    value = random_password.aurora_master.result
+  }
       ]
 
       # Soft + hard memory (reservation <= memory)

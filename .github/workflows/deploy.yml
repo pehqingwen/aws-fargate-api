@@ -61,6 +61,19 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: echo 'image = "'"${IMAGE}"'"' > ci.auto.tfvars
 
+      - name: Write dev.auto.tfvars (CI)
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          cat > dev.auto.tfvars <<'EOF'
+          private_subnet_ids = [
+          "subnet-08a230dc223d2d910",
+          "subnet-060715650420e180b",
+          "subnet-095cc0e813f36eab5",
+          "subnet-0e0159a584e947112",
+          "subnet-013bb5033bf931205",
+          "subnet-0b8b4059ee86a9f65",
+          ]
+
       - name: Terraform Plan (app-only targets)
         working-directory: ${{ env.TF_DIR }}
         run: >
@@ -111,3 +124,71 @@ jobs:
           echo "ALB: $ALB_DNS"
           curl -fsS "http://${ALB_DNS}/healthz"
           curl -fsS "http://${ALB_DNS}/api/hello"
+
+      - name: Debug TF_DIR contents
+        run: |
+          echo "PWD = $(pwd)"
+          ls -la
+          echo "--- terraform/envs/dev ---"
+          ls -la terraform/envs/dev || true 
+
+      - name: Wait until ECS service is stable (10m)
+        run: |
+          set -e
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE" --region "$AWS_REGION"
+
+      # If the wait fails, dump rich diagnostics (on failure) 
+      - name: Dump ECS/ALB diagnostics (on failure)
+        if: failure()
+        run: |
+          set -x
+
+            aws ecs describe-services \
+              --cluster "${CLUSTER}" \
+              --services "${SERVICE}" \
+              --region "${AWS_REGION}" \
+              --query 'services[0].events[0:15].[createdAt,message]'
+
+
+          TASKS=$(aws ecs list-tasks \
+            --cluster "${CLUSTER}" \
+            --service-name "${SERVICE}" \
+            --region "${AWS_REGION}" \
+            --query 'taskArns' --output text)
+          if [ -n "$TASKS" ]; then
+            aws ecs describe-tasks \
+              --cluster "${CLUSTER}" \
+              --tasks $TASKS \
+              --region "${AWS_REGION}" \
+              --query 'tasks[].{last:lastStatus,stop:stoppedReason,health:containers[0].healthStatus,reason:containers[0].reason,exit:containers[0].exitCode}'
+          fi
+
+
+          TG_ARN=$(aws elbv2 describe-target-groups \
+            --names fargate-api-tg \
+            --region "${AWS_REGION}" \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text || true)
+          if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
+            aws elbv2 describe-target-health \
+              --target-group-arn "$TG_ARN" \
+              --region "${AWS_REGION}" \
+              --query 'TargetHealthDescriptions[].{id:Target.Id,port:Target.Port,health:TargetHealth.State,desc:TargetHealth.Description}'
+          fi
+
+
+          LOG_GROUP="/ecs/fargate-api"
+          STREAM=$(aws logs describe-log-streams \
+            --log-group-name "$LOG_GROUP" \
+            --order-by LastEventTime --descending \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            --query 'logStreams[0].logStreamName' --output text || true)
+          if [ "$STREAM" != "None" ] && [ -n "$STREAM" ]; then
+            aws logs get-log-events \
+              --log-group-name "$LOG_GROUP" \
+              --log-stream-name "$STREAM" \
+              --limit 80 \
+              --region "${AWS_REGION}" \
+              --query 'events[].message'
+          fi

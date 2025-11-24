@@ -26,4 +26,16 @@ plan.txt
 
 # Node
 node_modules/
-npm-debug.log
+npm-debug.log*
+yarn.lock
+
+# Build artifacts (if any)
+dist/
+build/
+
+# Local env / secrets
+.env
+*.pem
+*.key
+*.crt
+.DS_Store

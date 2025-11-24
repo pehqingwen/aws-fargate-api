@@ -1,8 +1,13 @@
-# Security Groups
-resource "aws_security_group" "alb" {
-  name        = "${var.project}-alb-sg"
-  description = "ALB ingress"
+data "aws_region" "current" {}
 
+data "aws_caller_identity" "current" {}
+
+resource "aws_security_group" "alb" {
+  name        = "fargate-api-alb-sg"
+  description = "ALB ingress" # IMPORTANT: match the existing description
+  vpc_id      = data.aws_vpc.this.id
+
+  # Ingress: existing HTTP + new HTTPS
   ingress {
     from_port   = 80
     to_port     = 80
@@ -10,22 +15,28 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Project = var.project
-    Env     = var.env
+  # Egress: restricted to app port inside VPC
+  egress {
+    from_port   = 3000 # confirm this is your target port
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.this.cidr_block]
   }
 
-  lifecycle {
-    prevent_destroy = true
+  tags = {
+    Name    = "fargate-api-alb-sg"
+    Env     = "dev"
+    Project = "fargate-api"
   }
 }
+
 
 data "aws_iam_policy_document" "exec_assume" {
   statement {
@@ -125,27 +136,6 @@ resource "aws_appautoscaling_policy" "cpu_scale" {
   }
 }
 
-# DynamoDB table
-resource "aws_dynamodb_table" "items" {
-  name         = "fargate-items"
-  billing_mode = "PAY_PER_REQUEST"
-
-  hash_key = "pk"
-  attribute {
-    name = "pk"
-    type = "S"
-  }
-
-  tags = {
-    Project = var.project
-    Env     = var.env
-  }
-
-  lifecycle {
-    prevent_destroy = true
-  }
-
-}
 
 # Least-priv policy for the ECS task role to access the table
 data "aws_iam_policy_document" "dynamo_access" {
@@ -241,4 +231,81 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
   evaluation_periods  = 2
   period              = 60
   statistic           = "Average"
+}
+
+resource "aws_s3_bucket" "cloudtrail_logs" {
+  bucket        = "${var.project}-cloudtrail-${data.aws_region.current.name}"
+  force_destroy = true
+
+  tags = {
+    Name = "${var.project}-cloudtrail-logs"
+  }
+}
+
+# Minimal bucket policy so CloudTrail can write
+data "aws_iam_policy_document" "cloudtrail_bucket_policy" {
+  statement {
+    sid    = "AWSCloudTrailAclCheck"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.cloudtrail_logs.arn]
+  }
+
+  statement {
+    sid    = "AWSCloudTrailWrite"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    actions = [
+      "s3:PutObject"
+    ]
+    resources = ["${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+  policy = data.aws_iam_policy_document.cloudtrail_bucket_policy.json
+}
+
+resource "aws_cloudtrail" "main" {
+  name                          = "${var.project}-trail"
+  s3_bucket_name                = aws_s3_bucket.cloudtrail_logs.id
+  include_global_service_events = true
+  is_multi_region_trail         = true
+  enable_log_file_validation    = true
+  is_organization_trail         = false # set true if using AWS Orgs + proper perms
+
+  event_selector {
+    read_write_type           = "All"
+    include_management_events = true
+  }
+
+  tags = {
+    Name = "${var.project}-trail"
+  }
+}
+
+resource "aws_guardduty_detector" "main" {
+  enable = true
+
+  # Optional: control finding publishing frequency
+  finding_publishing_frequency = "FIFTEEN_MINUTES"
+}
+
+resource "aws_securityhub_account" "main" {
+  # Optional:
+  # auto_enable_controls = true  # automatically enable new controls when added
 }

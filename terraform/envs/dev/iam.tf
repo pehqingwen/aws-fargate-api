@@ -30,6 +30,7 @@ data "aws_iam_policy_document" "task_assume" {
     }
   }
 }
+
 resource "aws_iam_role" "task_role" {
   name               = "${var.project}-ecsTaskRole"
   assume_role_policy = data.aws_iam_policy_document.task_assume.json
